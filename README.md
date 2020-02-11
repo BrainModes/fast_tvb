@@ -33,17 +33,17 @@ docker run --rm --mount type=bind,source=/path/to/tvb_binary,target=/output tvb_
 cp /path/to/tvb_binary/tvb ../step2_create_Docker_container/
 cat /path/to/tvb_binary/build_output.txt
 ```
-The first command builds the Docker container with the build environment for compiling the C file. The second command compiles the C file and copies the output into the folder `/path/to/tvb_binary` in your local filesystem. The third command copies the created binary `tvb` into the folder `step2_create_Docker_container`. The fourth command lets you inspect the output of the compiler -- closely inspect whether it contains error messages or warning that need to be fixed.
-6. Now that our fast_tvb binary is created, we will create a Docker container that contains the binary for convenient execution on different platforms. Enter the folder `step2_create_Docker_container`.
+The first command builds the Docker container with the build environment for compiling the C file. The second command compiles the C file and copies the output into the folder `/path/to/tvb_binary` in your local filesystem. The third command copies the created binary `tvb` into the folder `step2_create_Docker_container`. The fourth command lets you inspect the output of the compiler -- closely inspect whether it contains error messages or warning that need to be fixed.  
+6. Now that our fast_tvb binary is created, we will create a Docker container that contains the binary for convenient execution on different platforms. Enter the folder `step2_create_Docker_container`.  
 7. To build the Docker file run
 ```
 docker build -t <your repo>/fast_tvb .
 ```
-replacing `<your repo>` with the name of your Dockerhub repository.
+replacing `<your repo>` with the name of your Dockerhub repository.  
 8. To push it into your repository run
 ```
 docker push <your repo>/fast_tvb
-```
+```  
 9. To run `fast_tvb` run
 ```
 docker run --rm --mount type=bind,source=/path/to/step2_create_Docker_container/output,target=/output --mount type=bind,source=/path/to/step2_create_Docker_container/input,target=/input  <your repo>/fast_tvb /start_simulation.sh param_set.txt gavg 4
