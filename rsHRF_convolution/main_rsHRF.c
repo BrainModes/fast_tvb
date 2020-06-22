@@ -1,7 +1,8 @@
 /* compile -> gcc main_rsHRF.c -lpthread -lm -lgsl -lgslcblas -o tvbii */
-/* execute -> ./tvbii <parameter_file_name> <SC_weights> <SC_distances> <rsHRF_file_name> <num_of_thread> */
+/* execute -> ./tvbii <param_filename> <SC_weights_filename> <SC_tract_lengths_filename> <rsHRF_filename> <num_of_thread> */ 
 
 /* All the inputs should be stored in a directory named Input and all the input files should be .txt files 
+    NOTE: Do NOT add '.txt' extension to the filenames, that is appended by the program
    The output gets stored in a fMRI.txt file formed in the directory of the execution-code */
 
 #include <time.h>
@@ -15,12 +16,12 @@
 #include <gsl/gsl_rng.h>
 #include <gsl/gsl_randist.h>
 
-/* Defining PI for Fourier-Operations */
+/* Defining PI */
 #ifndef PI
     # define PI	3.14159265358979323846264338327950288
 #endif
 
-/* Stores the information of the neural-activity for each region at each time-step (0 -> max_delay) */
+/* Stores the information of the neural-activity for each region at each time-step (0 to max_delay) */
 struct Xi_p 
 {
     float **Xi_elems;
@@ -90,7 +91,8 @@ void resample_sinc( float in[], size_t in_sz, float out[], size_t out_sz)
         out[i] = sinc_approx(in, in_sz, i*dx);
 }
 
-/* taking the dot product (to mimic convolution) between the neural states and the HRF (which has been reversed beforehand, and gets shifted in the function) */
+/* taking the dot product (to mimic convolution) between the neural states and the HRF (which has been reversed beforehand, and is shited by 'init' to align it to the neural response) */
+/* this is performed at every time-step falling at the BOLD Repetition Time */
 float shifted_reversed_dot_product(float* sigA, float* sigB, int n, int init)
 {
     float output = 0.;
@@ -130,7 +132,7 @@ typedef struct _thread_data_t {
     float               target_FR;
     int                 total_duration;
     int                 FIC_time;
-    int                 HRF_length;
+    int                 HRF_samples;
     __m128              _gamma;
     __m128              _one;
     __m128              _imintau_E;
@@ -188,8 +190,8 @@ void *run_simulation(void *arg)
     int     reg_act_size            = thr_data->reg_act_size;
     int     *n_conn_table           = thr_data->n_conn_table;       
     float   *J_i                    = thr_data->J_i;                // Feedback Inhibhition
-    float   *region_activity        = thr_data->region_activity;
-    float   *BOLD_ex                = thr_data->BOLD_ex;            // final BOLD output
+    float   *region_activity        = thr_data->region_activity;    
+    float   *BOLD_ex                = thr_data->BOLD_ex;            // BOLD output
     const   __m128 _gamma           = thr_data->_gamma;             
     const   __m128 _one             = thr_data->_one;
     const   __m128 _imintau_E       = thr_data->_imintau_E;
@@ -209,18 +211,18 @@ void *run_simulation(void *arg)
     const   __m128 _w_plus_J_NMDA   = thr_data->_w_plus_J_NMDA;
     const   __m128 _w_E__I_0        = thr_data->_w_E__I_0;
     struct  SC_capS *SC_cap         = thr_data->SC_cap;             // Structural connectome - weights
-    struct  rsHRFS  *rsHRF          = thr_data->rsHRF;              // Region wise rsHRF
-    struct  Xi_p *reg_globinp_p     = thr_data->reg_globinp_p;  
+    struct  rsHRFS  *rsHRF          = thr_data->rsHRF;              // Region wise resting-state HRF
+    struct  Xi_p *reg_globinp_p     = thr_data->reg_globinp_p;      
     int     BOLD_TR                 = thr_data->BOLD_TR;            // Repetition time for BOLD (in miliseconds)
     int     BOLD_TS_len             = thr_data->BOLD_TS_len;        // Length of the BOLD Time-Series
     float   model_dt                = thr_data->model_dt;           // Duration per sample (after temporal averaging) (in seconds)
     int     stock_steps             = thr_data->stock_steps;        // Number of samples required for each point of convolution - HRF_length / model's sampling period 
     int     interim_istep           = thr_data->interim_istep;      // Number of steps for each temporal averaging period model's sampling period / integration period
-    float   target_FR               = thr_data->target_FR;          // target firing rate
-    int     total_duration          = thr_data->total_duration;     // total duration of simulated signal (in seconds)
-    int     HRF_length              = thr_data->HRF_length;         // length of HRF (in seconds)
-    int     FIC_time                = thr_data->FIC_time;           // duration of Feedback Inhibhition Control Parameter (in seconds)
-    char*   output_file             = thr_data->output_file;
+    float   target_FR               = thr_data->target_FR;          // Target firing rate
+    int     total_duration          = thr_data->total_duration;     // Total duration of simulated signal (in seconds)
+    int     HRF_samples             = thr_data->HRF_samples;        // Length of the HRF time-series
+    int     FIC_time                = thr_data->FIC_time;           // Duration for which J_i is iteratively corrected (in seconds)
+    char*   output_file             = thr_data->output_file;        // Output filename where the simulated BOLD response is stored
 
     /* Parallelism: divide work among threads */
     int nodes_vec_mt        = divRoundup(nodes_vec, n_threads);
@@ -260,9 +262,7 @@ void *run_simulation(void *arg)
     pthread_barrier_wait(&mybarrier_base);
 
 
-    
     /* Initialize random number generator */
-    //const gsl_rng_type * T;
     gsl_rng *r = gsl_rng_alloc (gsl_rng_mt19937);
     gsl_rng_set (r, (t_id+rand_num_seed)); // Random number seed -- otherwise every node gets the same random nums
     srand((unsigned)(t_id+rand_num_seed));
@@ -296,7 +296,7 @@ void *run_simulation(void *arg)
     int   FIC_time_steps      = divRoundClosest(FIC_time/model_dt, 1);                                                 // Number of time steps for FIC cycle   
     int   time_steps          = FIC_time_steps + (divRoundClosest(total_duration/model_dt, 1)) + stock_steps;          // Total time-steps for the simulation loop
     int   BOLD_TR_steps       = divRoundClosest(BOLD_TR/model_dt, 1);                                                  // Number of steps per BOLD Repetition Time
-    float *BOLD       = (float *)_mm_malloc(nodes_mt * BOLD_TS_len * sizeof(float),16);                                // resulting BOLD output
+    float *BOLD               = (float *)_mm_malloc(nodes_mt * BOLD_TS_len * sizeof(float),16);                        // Resulting BOLD output
 
     // Reset arrays and variables
     int i_meanfr            = 0;
@@ -312,7 +312,7 @@ void *run_simulation(void *arg)
         J_i_local[j]        = J_i[j+start_nodes_mt];
     }
 
-    /* Allocating memory for the Simulated Neural Response and the HRF signal */
+    /* Allocating memory for the Simulated Neural Response */
     float **SIMULATED_signal = (float **)_mm_malloc(nodes_mt * sizeof(float*),16);
     if(SIMULATED_signal == NULL)
     {
@@ -330,6 +330,7 @@ void *run_simulation(void *arg)
         }
     }
     
+    /* Allocating memory for the resting-state HRF */
     float **HRF_signal = (float **)_mm_malloc((nodes_mt) * sizeof(float*),16);
     if(HRF_signal == NULL)
     {
@@ -345,8 +346,8 @@ void *run_simulation(void *arg)
             printf( "ERROR: Running out of memory. Aborting... \n");
             exit(2);
         }
-        /* resampling and storing the HRF signal */
-        resample_sinc(rsHRF[i+start_nodes_mt].hrf, HRF_length, HRF_signal[i], stock_steps) ;                                
+        /* resampling (from HRF_samples to stock_steps) and storing the HRF signal */
+        resample_sinc(rsHRF[i+start_nodes_mt].hrf, HRF_samples, HRF_signal[i], stock_steps) ;                                
     }
 
 
@@ -458,7 +459,7 @@ void *run_simulation(void *arg)
             
         }
 
-        /* re-calculating every 10 seconds */
+        /* re-calculating every 10 seconds till FIC_time */
         if (ts >= divRoundClosest(10000/model_dt, 1) && ts <= (FIC_time_steps) && ts % divRoundClosest(10000/model_dt, 1) == 0) 
         {
             i_node_vec_local        = 0;
@@ -489,7 +490,7 @@ void *run_simulation(void *arg)
 
             i_node_vec_local = 0;
  
-            // Compute variance
+            /* Compute variance */
             float var_FR = 0.0f, tmpvar;
 
             for (i_node_vec = start_nodes_mt; i_node_vec < end_nodes_mt_glob; i_node_vec++)
@@ -509,7 +510,7 @@ void *run_simulation(void *arg)
              Inhibitory synaptic plasticity from Vogels et al. Science 2011
              Eq 1: dw = eta(pre × post – r0 × pre)
              #################################################
-             */
+            */
  
             i_node_vec_local = 0;
  
@@ -537,7 +538,7 @@ void *run_simulation(void *arg)
             }
         }
         
-        /*Saving the Simulated Activity after the initial FI */
+        /*Saving the Simulated Activity after the initial FIC_time_steps */
         if(ts >= FIC_time_steps)
         {
             for (j = 0; j < nodes_mt; j++) 
@@ -546,7 +547,8 @@ void *run_simulation(void *arg)
             } 
         }
 
-        /* after the target_firing rate has been adjusted and SIMULATED_signal has been calculated for stock_steps, we convolve the neural states with the HRF to begin obtaining the BOLD response*/
+        /* after the target_firing rate has been corrected and SIMULATED_signal has been calculated for initial stock_steps, 
+        we convolve the neural states with the HRF (at each time-step falling on BOLD_TR_steps) to begin obtaining the BOLD response*/
         if(ts >= (FIC_time_steps + stock_steps) && ts >= BOLD_TR_steps && ts % BOLD_TR_steps == 0)
         {
             for (j = 0; j < (end_nodes_mt_glob - start_nodes_mt); j++)
@@ -808,7 +810,7 @@ int importGlobalConnectivity(char *SC_cap_filename, char *SC_dist_filename, char
 int main(int argc, char* argv[])
 {
 
-    // checking whether the right number of parameters were passed, if not returns with an error
+    /* checking whether the right number of parameters were passed, if not returns with an error */
     if (argc != 6 || atoi(argv[5]) <= 0) 
     {
         printf("\nERROR: Invalid arguments.\n\nUsage: tvbii <paramset_file> <SC_distances> <SC_weights> <rsHRF> <#threads>\n\nTerminating... \n\n");
@@ -846,11 +848,12 @@ int main(int argc, char* argv[])
     float       target_FR           = 3.0f;             // Target firing rate for exc. pops during inhibitory plasticity
     int         rand_num_seed       = 1403;             // Random Number Seed
     int         HRF_length          = 25;               // Duration of HRF (in s)
+    int         HRF_samples         = 11;               // Number of sampled in the rsHRF
 
     /*
      Local model: DMF-Parameters from Deco et al. JNeuro 2014
      */
-    float w_plus        = 1.4;          // local excitatory recurrence synaptic weight
+    float w_plus        = 1.4;          // Local excitatory recurrence synaptic weight
     float J_NMDA        = 0.15;         // (nA) excitatory synaptic coupling
     const float a_E     = 310;          // (n/C)
     const float b_E     = 125;          // (Hz)
@@ -858,14 +861,14 @@ int main(int argc, char* argv[])
     const float a_I     = 615;          // (n/C)
     const float b_I     = 177;          // (Hz)
     const float d_I     = 0.087;        // (s)
-    const float gamma   = 0.641/1000.0; // factor 1000 for expressing everything in ms
+    const float gamma   = 0.641/1000.0; // Factor 1000 for expressing everything in ms
     const float tau_E   = 100;          // (ms) Time constant of NMDA (excitatory)
     const float tau_I   = 10;           // (ms) Time constant of GABA (inhibitory)
     float       sigma   = 0.00316228;   // (nA) Noise amplitude
     const float I_0     = 0.382;        // (nA) overall effective external input
-    const float w_E     = 1.0;          // scaling of external input for excitatory pool
-    const float w_I     = 0.7;          // scaling of external input for inhibitory pool
-    const float gamma_I = 1.0/1000.0;   // for expressing inhib. pop. in ms
+    const float w_E     = 1.0;          // Scaling of external input for excitatory pool
+    const float w_I     = 0.7;          // Scaling of external input for inhibitory pool
+    const float gamma_I = 1.0/1000.0;   // For expressing inhib. pop. in ms
     float       tmpJi   = 1.0;          // Feedback inhibition J_i
     
     /* Read parameters from input file. Input file is a simple text file that contains one line with parameters and white spaces in between. */
@@ -877,6 +880,7 @@ int main(int argc, char* argv[])
         printf( "\nERROR: Could not open file %s. Terminating... \n\n", param_file);
         exit(2);
     }
+
     /* Reading the values for : 
 
         Number of nodes/regions
@@ -887,13 +891,13 @@ int main(int argc, char* argv[])
         Noise amplitude
         FIC_time - in seconds
         Simulation length - in seconds
-        HRF length - in seconds
+        HRF sample length 
         BOLD Repetition Time - in mili-seconds
         Global transmission velocity
         Random Number Seed
         
     */
-    if(fscanf(file,"%d",&nodes) != EOF && fscanf(file,"%f",&G) != EOF && fscanf(file,"%f",&J_NMDA) != EOF && fscanf(file,"%f",&w_plus) != EOF && fscanf(file,"%f",&tmpJi) != EOF && fscanf(file,"%f",&sigma) != EOF && fscanf(file,"%d",&FIC_time) != EOF && fscanf(file,"%d",&total_duration) != EOF && fscanf(file,"%d",&HRF_length) != EOF && fscanf(file,"%d",&BOLD_TR) != EOF && fscanf(file,"%f",&global_trans_v) != EOF && fscanf(file,"%d",&rand_num_seed) != EOF){} 
+    if(fscanf(file,"%d",&nodes) != EOF && fscanf(file,"%f",&G) != EOF && fscanf(file,"%f",&J_NMDA) != EOF && fscanf(file,"%f",&w_plus) != EOF && fscanf(file,"%f",&tmpJi) != EOF && fscanf(file,"%f",&sigma) != EOF && fscanf(file,"%d",&FIC_time) != EOF && fscanf(file,"%d",&total_duration) != EOF && fscanf(file,"%d",&HRF_samples) != EOF && fscanf(file,"%d",&BOLD_TR) != EOF && fscanf(file,"%f",&global_trans_v) != EOF && fscanf(file,"%d",&rand_num_seed) != EOF){} 
     else
     {
         printf( "\nERROR: Unexpected end-of-file in file %s. File contains less input than expected. Terminating... \n\n", param_file);
@@ -901,7 +905,7 @@ int main(int argc, char* argv[])
     }
     fclose(file);
 
-    // file name where the fMRI output gets stored
+    /* file name where the fMRI output gets stored */
     char output_file[300]; memset(output_file, 0, 300*sizeof(char));
     strcpy(output_file, "fMRI.txt");
 
@@ -959,7 +963,7 @@ int main(int argc, char* argv[])
     char rsHRF_file[300]; memset(rsHRF_file, 0, sizeof(rsHRF_file));
     strcat(strcat(strcat(rsHRF_file,"./Input/"), argv[4]),".txt");
     
-    int         maxdelay = importGlobalConnectivity(cap_file, dist_file, rsHRF_file, nodes, global_trans_v, HRF_length, G_J_NMDA, model_dt, dt, &region_activity, &reg_globinp_p, &n_conn_table, &SC_cap, &SC_rowsums, &SC_inpreg, &rsHRF);
+    int         maxdelay = importGlobalConnectivity(cap_file, dist_file, rsHRF_file, nodes, global_trans_v, HRF_samples, G_J_NMDA, model_dt, dt, &region_activity, &reg_globinp_p, &n_conn_table, &SC_cap, &SC_rowsums, &SC_inpreg, &rsHRF);
     
     int         reg_act_size = nodes * maxdelay;
 
@@ -1055,7 +1059,7 @@ int main(int argc, char* argv[])
         thr_data[i].BOLD_ex             =   BOLD_ex                 ;
         thr_data[i].rand_num_seed       =   rand_num_seed           ;
         thr_data[i].FIC_time            =   FIC_time                ;
-        thr_data[i].HRF_length          =   HRF_length              ;
+        thr_data[i].HRF_samples         =   HRF_samples              ;
         thr_data[i].output_file         =   output_file             ;
         
         if ((rc = pthread_create(&thr[i], NULL, run_simulation, &thr_data[i]))) 
