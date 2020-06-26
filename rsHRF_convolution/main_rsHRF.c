@@ -1,7 +1,7 @@
 /* compile -> gcc main_rsHRF.c -lpthread -lm -lgsl -lgslcblas -o tvbii */
 /* execute -> ./tvbii <param_filename> <SC_weights_filename> <SC_tract_lengths_filename> <rsHRF_filename> <num_of_thread> */ 
 
-/* All the inputs should be stored in a directory named Input and all the input files should be .txt files 
+/* All the inputs should be stored in a directory named C_Input and all the input files should be .txt files 
     NOTE: Do NOT add '.txt' extension to the filenames, that is appended by the program
    The output gets stored in a fMRI.txt file formed in the directory of the execution-code */
 
@@ -276,7 +276,7 @@ void *run_simulation(void *arg)
     float   *S_i_E                  = (float *)_mm_malloc(nodes_mt * sizeof(float),16);
     float   *S_i_I                  = (float *)_mm_malloc(nodes_mt * sizeof(float),16);
     float   *J_i_local              = (float *)_mm_malloc(nodes_mt * sizeof(float),16);
-    
+
     if (meanFR == NULL || meanFR_INH == NULL || global_input == NULL || S_i_E==NULL || S_i_I==NULL || J_i_local==NULL) 
     {
         printf( "ERROR: Running out of memory. Aborting... \n");
@@ -290,13 +290,14 @@ void *run_simulation(void *arg)
     __m128          *_S_i_E             = (__m128*)S_i_E;
     __m128          *_S_i_I             = (__m128*)S_i_I;
     __m128          *_J_i_local         = (__m128*)J_i_local;
-    
+
     // model parameters
     float mean_mean_FR        = 0.0;
     int   FIC_time_steps      = divRoundClosest(FIC_time/model_dt, 1);                                                 // Number of time steps for FIC cycle   
     int   time_steps          = FIC_time_steps + (divRoundClosest(total_duration/model_dt, 1)) + stock_steps;          // Total time-steps for the simulation loop
     int   BOLD_TR_steps       = divRoundClosest(BOLD_TR/model_dt, 1);                                                  // Number of steps per BOLD Repetition Time
     float *BOLD               = (float *)_mm_malloc(nodes_mt * BOLD_TS_len * sizeof(float),16);                        // Resulting BOLD output
+
 
     // Reset arrays and variables
     int i_meanfr            = 0;
@@ -396,13 +397,13 @@ void *run_simulation(void *arg)
                 
                 // Excitatory population firing rate
                 _tmp_I_E    = _mm_sub_ps(_mm_mul_ps(_a_E,_mm_add_ps(_mm_add_ps(_w_E__I_0,_mm_mul_ps(_w_plus_J_NMDA, _S_i_E[i_node_vec_local])),_mm_sub_ps(_global_input[i_node_vec_local],_mm_mul_ps(_J_i_local[i_node_vec_local], _S_i_I[i_node_vec_local])))),_b_E);
-                
+
                 *_tmp_exp_E     = _mm_mul_ps(_min_d_E, _tmp_I_E);
                 tmp_exp_E[0]    = tmp_exp_E[0] != 0 ? expf(tmp_exp_E[0]) : 0.9;
                 tmp_exp_E[1]    = tmp_exp_E[1] != 0 ? expf(tmp_exp_E[1]) : 0.9;
                 tmp_exp_E[2]    = tmp_exp_E[2] != 0 ? expf(tmp_exp_E[2]) : 0.9;
                 tmp_exp_E[3]    = tmp_exp_E[3] != 0 ? expf(tmp_exp_E[3]) : 0.9;
-                _tmp_H_E        = _mm_div_ps(_tmp_I_E, _mm_sub_ps(_one, *_tmp_exp_E));
+                _tmp_H_E        = (_mm_div_ps(_tmp_I_E, _mm_sub_ps(_one, *_tmp_exp_E)));
                 _meanFR[i_node_vec_local] = _mm_add_ps(_meanFR[i_node_vec_local],_tmp_H_E);
 
                 
@@ -461,81 +462,55 @@ void *run_simulation(void *arg)
 
         /* re-calculating every 10 seconds till FIC_time */
         if (ts >= divRoundClosest(10000/model_dt, 1) && ts <= (FIC_time_steps) && ts % divRoundClosest(10000/model_dt, 1) == 0) 
-        {
-            i_node_vec_local        = 0;
- 
+        {     
             /*  Compute mean firing rates */
-            mean_mean_FR            = 0;
-            float mean_mean_FR_INH  = 0;
- 
-            for (i_node_vec = start_nodes_mt; i_node_vec < end_nodes_mt_glob; i_node_vec++)
-            {
-                meanFR[i_node_vec_local]           = meanFR[i_node_vec_local] / i_meanfr;
-                meanFR_INH[i_node_vec_local]       = meanFR_INH[i_node_vec_local] / i_meanfr;
-                mean_mean_FR        += meanFR[i_node_vec_local];
-                mean_mean_FR_INH    += meanFR_INH[i_node_vec_local];
-                i_node_vec_local ++;
-            }
- 
-            mean_mean_FR            /= (end_nodes_mt_glob - start_nodes_mt);
-            mean_mean_FR_INH        /= (end_nodes_mt_glob - start_nodes_mt);
-
-
-            for(; i_node_vec < end_nodes_mt; i_node_vec++)
-            {
-                meanFR[i_node_vec_local]           = meanFR[i_node_vec_local] / i_meanfr;
-                meanFR_INH[i_node_vec_local]       = meanFR_INH[i_node_vec_local] / i_meanfr;
-                i_node_vec_local ++;
+            mean_mean_FR = 0;
+            float mean_mean_FR_INH = 0;
+            for (j = 0; j < nodes; j++){
+                meanFR[j]     = meanFR[j] / i_meanfr;
+                meanFR_INH[j] = meanFR_INH[j] / i_meanfr;
+                mean_mean_FR += meanFR[j];
+                mean_mean_FR_INH += meanFR_INH[j];
             }
 
-            i_node_vec_local = 0;
- 
+            mean_mean_FR /= nodes;
+            mean_mean_FR_INH /= nodes;
+
             /* Compute variance */
             float var_FR = 0.0f, tmpvar;
-
-            for (i_node_vec = start_nodes_mt; i_node_vec < end_nodes_mt_glob; i_node_vec++)
-            {
-                tmpvar              = meanFR[i_node_vec_local] - mean_mean_FR;
-                var_FR              += (tmpvar * tmpvar);
-                i_node_vec_local ++;
+            for (j = 0; j < nodes; j++){
+                tmpvar = meanFR[j] - mean_mean_FR;
+                var_FR += (tmpvar * tmpvar);
             }
- 
-            var_FR                  /= nodes_mt;
-            float std_FR            = sqrt(var_FR);
- 
-            printf("time (s): %d\t\tmean+/-std firing rate exc. pops.: %.2f +/- %.2f\n", divRoundClosest(ts*model_dt/1000, 1), mean_mean_FR, std_FR);
-             
+
+            var_FR /= nodes;
+            float std_FR = sqrt(var_FR);
+            printf("time (s): %d\t\tmean+/-std firing rate exc. pops.: %.2f +/- %.2f\n", ts/1000, mean_mean_FR, std_FR);
+
             /*
              #################################################
              Inhibitory synaptic plasticity from Vogels et al. Science 2011
              Eq 1: dw = eta(pre × post – r0 × pre)
              #################################################
             */
- 
-            i_node_vec_local = 0;
- 
+
             float isp_eta = 0.001;
             float isp_r0  = target_FR;
-            for (i_node_vec = start_nodes_mt; i_node_vec < end_nodes_mt; i_node_vec++)
-            {
-                float pre  = meanFR_INH[i_node_vec_local];
-                float post = meanFR[i_node_vec_local];
-                J_i_local[i_node_vec_local] +=  isp_eta * (pre * post - isp_r0 * pre);
-                J_i_local[i_node_vec_local] = J_i_local[i_node_vec_local] > 0 ? J_i_local[i_node_vec_local] : 0; // make sure that weight is always >=0
-                J_i[i_node_vec] = J_i_local[i_node_vec_local];                              // copying to the global value at each cycle
-                i_node_vec_local ++;
+            for (j = 0; j < nodes; j++){
+                float pre  = meanFR_INH[j];
+                float post = meanFR[j];
+                J_i_local[j] +=  isp_eta * (pre * post - isp_r0 * pre);
+                J_i_local[j] = J_i_local[j] > 0 ? J_i_local[j] : 0; // make sure that weight is always >=0
             }
-            
-            /* Reset variables and arrays */
-            i_node_vec_local = 0;
-            i_meanfr = 0;
 
-            for (i_node_vec = start_nodes_mt; i_node_vec < end_nodes_mt; i_node_vec++)
-            {
-                meanFR[i_node_vec_local]           = 0.0;
-                meanFR_INH[i_node_vec_local]       = 0.0;
-                i_node_vec_local ++;
+            /* Reset arrays */
+            i_meanfr = 0;
+            for (j = 0; j < nodes; j++) {
+                meanFR[j]           = 0.0;
+                meanFR_INH[j]       = 0.0;
             }
+
+
         }
         
         /*Saving the Simulated Activity after the initial FIC_time_steps */
@@ -555,9 +530,16 @@ void *run_simulation(void *arg)
             {  
                 BOLD[ts_bold_i +  j * BOLD_TS_len] = shifted_reversed_dot_product(SIMULATED_signal[j], HRF_signal[j], stock_steps, ts - FIC_time_steps);
             }
+
             ts_bold_i++;
         }
     } /* Simulation loop */
+
+    /* Copying the Feedback Inhibhition Parameter Values */
+    for(j = 0; j < (end_nodes_mt_glob - start_nodes_mt); j++)
+    {
+        J_i[start_nodes_mt + j] = J_i_local[j];
+    }
 
     /* Copy results of this thread into shared memory buffer */
     memcpy(&BOLD_ex[start_nodes_mt*BOLD_TS_len], BOLD, (end_nodes_mt_glob - start_nodes_mt) * BOLD_TS_len * sizeof( float ));
@@ -580,6 +562,19 @@ void *run_simulation(void *arg)
         }
         fclose(FCout);
     }
+
+    /* Writing the J_i values in the output file */
+    if (t_id == 0)
+    {
+        FILE *FCout = fopen("J_i.txt", "w+");
+        for(j = 0; j < nodes; j++)
+        {
+            fprintf(FCout, "%.5f ", J_i[j]);
+            fprintf(FCout, "\n");
+        }
+        fclose(FCout);
+    }
+
 
     _mm_free(SIMULATED_signal);
     _mm_free(HRF_signal);
@@ -768,6 +763,7 @@ int importGlobalConnectivity(char *SC_cap_filename, char *SC_dist_filename, char
                         tmpint = (int)(((tmp2/global_trans_v)/(model_dt*dt))+0.5); //  *10 for getting from m/s or mm/ms to 10kHz sampling, +0.5 for rounding by casting
                         if (tmpint < 0 || tmpint > maxdelay)
                         {
+                            printf("Delay: %d \t Max delay: %d\n", tmpint, maxdelay);
                             printf( "\nERROR: Negative or too high (larger than maximum specified number) connection length/delay %d -> %d. Terminating... \n\n",i,j);exit(2);
                         }
                         if (tmpint <= 0) tmpint = 1; // If time delay is smaller than integration step size, than set time delay to one integration step
@@ -874,7 +870,7 @@ int main(int argc, char* argv[])
     /* Read parameters from input file. Input file is a simple text file that contains one line with parameters and white spaces in between. */
     FILE *file;
     char param_file[300];memset(param_file, 0, 300*sizeof(char));
-    snprintf(param_file, sizeof(param_file), "./Input/%s.txt",argv[1]);
+    snprintf(param_file, sizeof(param_file), "./C_Input/%s.txt",argv[1]);
     file=fopen(param_file, "r");
     if (file==NULL){
         printf( "\nERROR: Could not open file %s. Terminating... \n\n", param_file);
@@ -955,13 +951,13 @@ int main(int argc, char* argv[])
     struct SC_inpregS   *SC_inpreg;
 
     char cap_file[300];memset(cap_file, 0, 300*sizeof(char));
-    strcat(strcat(strcat(cap_file,"./Input/"), argv[2]),".txt");
+    strcat(strcat(strcat(cap_file,"./C_Input/"), argv[2]),".txt");
 
     char dist_file[300];memset(dist_file, 0, 300*sizeof(char));
-    strcat(strcat(strcat(dist_file,"./Input/"), argv[3]),".txt");
+    strcat(strcat(strcat(dist_file,"./C_Input/"), argv[3]),".txt");
 
     char rsHRF_file[300]; memset(rsHRF_file, 0, sizeof(rsHRF_file));
-    strcat(strcat(strcat(rsHRF_file,"./Input/"), argv[4]),".txt");
+    strcat(strcat(strcat(rsHRF_file,"./C_Input/"), argv[4]),".txt");
     
     int         maxdelay = importGlobalConnectivity(cap_file, dist_file, rsHRF_file, nodes, global_trans_v, HRF_samples, G_J_NMDA, model_dt, dt, &region_activity, &reg_globinp_p, &n_conn_table, &SC_cap, &SC_rowsums, &SC_inpreg, &rsHRF);
     
@@ -1059,7 +1055,7 @@ int main(int argc, char* argv[])
         thr_data[i].BOLD_ex             =   BOLD_ex                 ;
         thr_data[i].rand_num_seed       =   rand_num_seed           ;
         thr_data[i].FIC_time            =   FIC_time                ;
-        thr_data[i].HRF_samples         =   HRF_samples              ;
+        thr_data[i].HRF_samples         =   HRF_samples             ;
         thr_data[i].output_file         =   output_file             ;
         
         if ((rc = pthread_create(&thr[i], NULL, run_simulation, &thr_data[i]))) 
