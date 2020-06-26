@@ -504,8 +504,8 @@ void *run_simulation(void *arg)
             for (j = 0; j < nodes; j++){
                 float pre  = meanFR_INH[j];
                 float post = meanFR[j];
-                J_i[j] +=  isp_eta * (pre * post - isp_r0 * pre);
-                J_i[j] = J_i[j] > 0 ? J_i[j] : 0; // make sure that weight is always >=0
+                J_i_local[j] +=  isp_eta * (pre * post - isp_r0 * pre);
+                J_i_local[j] = J_i_local[j] > 0 ? J_i_local[j] : 0; // make sure that weight is always >=0
             }
 
             /* Reset arrays */
