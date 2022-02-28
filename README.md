@@ -66,13 +66,12 @@ For more information on how to use `fast_tvb`, please follow the instructions at
   
   Schirner, M., McIntosh, A. R., Jirsa, V., Deco, G., & Ritter, P. (2018). Inferring multi-scale neural mechanisms with brain network modelling. Elife, 7, e28927.
   
+  Schirner, M., Domide, L., Perdikis, D., Triebkorn, P., Stefanovski, L., Pai, R., ... & Ritter, P. (2022). Brain simulation as a cloud service: The Virtual Brain on EBRAINS. NeuroImage, 118973.
+  
   Shen, K., Bezgin, G., Schirner, M., Ritter, P., Everling, S., McIntosh, A. R. (2019) A macaque connectome for large-scale network simulations in TheVirtualBrain. (under review)
   
   Wong, K. F., & Wang, X. J. (2006). A recurrent network mechanism of time integration in perceptual decisions. Journal of Neuroscience, 26(4), 1314-1328.
-  
-  
-  # References
-Schirner, M., Domide, L., Perdikis, D., Triebkorn, P., Stefanovski, L., Pai, R., ... & Ritter, P. (2022). Brain simulation as a cloud service: The Virtual Brain on EBRAINS. NeuroImage, 118973.
+ 
 
 # Acknowledgments
 
